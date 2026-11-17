@@ -60,13 +60,14 @@ jobs:
       - name: Upgrade from each release
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          # Every release runs, also after one fails.
           status=0
           for version in $UPGRADE_FROM; do
             echo "::group::$version -> this build"
+            code=0
             scripts/upgrade-check.sh "$RUNNER_TEMP/releases/logos-blockchain-node-$version" \
-              target/ci-release/logos-blockchain-node "$RUNNER_TEMP/upgrade-$version"
-            code=$?
+              target/ci-release/logos-blockchain-node "$RUNNER_TEMP/upgrade-$version" || code=$?
             echo "::endgroup::"
             # A tooling error (255) outranks a failed check (1).
             if [ "$code" -gt "$status" ]; then status=$code; fi
