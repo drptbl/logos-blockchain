@@ -15,6 +15,8 @@ concurrency:
 # see scripts/upgrade-check.sh.
 env:
   UPGRADE_FROM: "0.3.2 0.3.4"
+  # Operators download from here, also when this runs on a fork.
+  RELEASES_REPO: logos-blockchain/logos-blockchain
 
 jobs:
   # Runs in the merge queue, like the end-to-end tests, and on demand.
@@ -50,7 +52,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/releases"
           for version in $UPGRADE_FROM; do
             asset="logos-blockchain-node-linux-$arch-$version.tar.gz"
-            curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$version/$asset" |
+            curl -fsSL "https://github.com/$RELEASES_REPO/releases/download/$version/$asset" |
               tar -xzO logos-blockchain-node >"$RUNNER_TEMP/releases/logos-blockchain-node-$version"
             chmod +x "$RUNNER_TEMP/releases/logos-blockchain-node-$version"
           done
