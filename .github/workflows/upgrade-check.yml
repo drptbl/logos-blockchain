@@ -1,0 +1,96 @@
+on:
+  pull_request:
+  merge_group:
+    types: [ checks_requested ]
+  workflow_dispatch:
+
+name: Upgrade check
+
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+# The releases an operator upgrades from; add each release here when it is
+# cut. Each one writes its own data directory and this build takes it over,
+# see scripts/upgrade-check.sh.
+env:
+  UPGRADE_FROM: "0.3.2 0.3.4"
+  # Operators download from here, also when this runs on a fork.
+  RELEASES_REPO: logos-blockchain/logos-blockchain
+
+jobs:
+  # Runs in the merge queue, like the end-to-end tests, and on demand.
+  upgrade:
+    name: Upgrade from earlier releases
+    if: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+    runs-on: bladerunner-linux
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      - name: Build the node
+        run: cargo build --locked --profile ci-release -p logos-blockchain-node --bin logos-blockchain-node
+
+      - name: Download the earlier releases
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          mkdir -p "$RUNNER_TEMP/releases"
+          for version in $UPGRADE_FROM; do
+            asset="logos-blockchain-node-linux-$arch-$version.tar.gz"
+            curl -fsSL "https://github.com/$RELEASES_REPO/releases/download/$version/$asset" |
+              tar -xzO logos-blockchain-node >"$RUNNER_TEMP/releases/logos-blockchain-node-$version"
+            chmod +x "$RUNNER_TEMP/releases/logos-blockchain-node-$version"
+          done
+
+      - name: Upgrade from each release
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every release runs, also after one fails.
+          status=0
+          for version in $UPGRADE_FROM; do
+            echo "::group::$version -> this build"
+            code=0
+            scripts/upgrade-check.sh "$RUNNER_TEMP/releases/logos-blockchain-node-$version" \
+              target/ci-release/logos-blockchain-node "$RUNNER_TEMP/upgrade-$version" || code=$?
+            echo "::endgroup::"
+            # A tooling error (255) outranks a failed check (1).
+            if [ "$code" -gt "$status" ]; then status=$code; fi
+          done
+          exit "$status"
+
+      # Logs and configs only: the data directories hold databases and keys.
+      - name: Upload the upgrade logs and configs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        with:
+          name: upgrade-check-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/upgrade-*/*.log
+            ${{ runner.temp }}/upgrade-*/*.json
+            ${{ runner.temp }}/upgrade-*/keys.*
+            ${{ runner.temp }}/upgrade-*/*/user_config.yaml*
+            ${{ runner.temp }}/upgrade-*/*/init-config.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
